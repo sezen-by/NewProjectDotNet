@@ -4,8 +4,14 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using RateLimiter.Data;
 using System.Text;
+using RateLimiter.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Add logging
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.SetMinimumLevel(LogLevel.Information);
 
 // Add services to the container.
 builder.Services.AddControllers();
@@ -36,17 +42,27 @@ builder.Services.AddAuthentication(options =>
 
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(opt =>
+builder.Services.AddSwaggerGen(c =>
 {
-    opt.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    c.SwaggerDoc("v1", new OpenApiInfo 
+    { 
+        Title = "Rate Limiter API", 
+        Version = "v1",
+        Description = "API with rate limiting and whitelist functionality"
+    });
+
+    // JWT için security tanımı
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
         Name = "Authorization",
         In = ParameterLocation.Header,
-        Type = SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT"
     });
-    opt.AddSecurityRequirement(new OpenApiSecurityRequirement
+
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
     {
         {
             new OpenApiSecurityScheme
@@ -57,10 +73,12 @@ builder.Services.AddSwaggerGen(opt =>
                     Id = "Bearer"
                 }
             },
-            new string[] {}
+            Array.Empty<string>()
         }
     });
 });
+
+builder.Services.AddMemoryCache(); // Add this line for rate limiter
 
 var app = builder.Build();
 
@@ -75,10 +93,17 @@ using (var scope = app.Services.CreateScope())
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-    app.UseSwaggerUI();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Rate Limiter API V1");
+        c.RoutePrefix = "swagger";
+    });
 }
 
 app.UseHttpsRedirection();
+
+// Add rate limiter middleware before authentication
+app.UseSlidingWindowRateLimiter(maxRequests: 100, windowSeconds: 60);
 
 // Authentication middleware'ini ekle - Authorization'dan önce olmalı
 app.UseAuthentication();

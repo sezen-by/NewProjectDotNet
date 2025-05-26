@@ -39,10 +39,18 @@ namespace RateLimiter.Controllers
                 if (!BCrypt.Net.BCrypt.Verify(request.Password, user.Password))
                     return Unauthorized("Invalid credentials");
 
-                // JWT token oluştur
-                var token = GenerateJwtToken(user);
+                // Kullanıcının whitelist'te olup olmadığını kontrol et
+                var isWhitelisted = await _context.WhitelistedUsers
+                    .AnyAsync(w => w.UserId == user.Id && w.IsActive);
 
-                return Ok(new { token = token });
+                // JWT token oluştur
+                var token = GenerateJwtToken(user, isWhitelisted);
+
+                return Ok(new { 
+                    token = token,
+                    isWhitelisted = isWhitelisted,
+                    role = user.Role.ToString()
+                });
             }
             catch (Exception ex)
             {
@@ -65,12 +73,12 @@ namespace RateLimiter.Controllers
                 // Şifreyi hash'le
                 var hashedPassword = BCrypt.Net.BCrypt.HashPassword(request.Password);
 
-                // Yeni kullanıcı oluştur
+                // Yeni kullanıcı oluştur - Role otomatik olarak User olacak
                 var user = new User
                 {
                     Username = request.Username,
                     Password = hashedPassword,
-                    Role = request.Role ?? "user",
+                    Role = UserRole.user, // Sabit olarak user rolü (enum)
                     CreatedAt = DateTime.UtcNow
                 };
 
@@ -85,19 +93,22 @@ namespace RateLimiter.Controllers
             }
         }
 
-        private string GenerateJwtToken(User user)
+        private string GenerateJwtToken(User user, bool isWhitelisted = false)
         {
             var tokenHandler = new JwtSecurityTokenHandler();
             var key = Encoding.ASCII.GetBytes(_configuration["Jwt:SecretKey"] ?? "supersecretkey123!supersecretkey123!1234");
             
+            var claims = new List<Claim>
+            {
+                new Claim(ClaimTypes.Name, user.Username),
+                new Claim(ClaimTypes.Role, user.Role.ToString()),
+                new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                new Claim("isWhitelisted", isWhitelisted.ToString().ToLower()) // Rate limiter için kullanacağız
+            };
+
             var tokenDescriptor = new SecurityTokenDescriptor
             {
-                Subject = new ClaimsIdentity(new Claim[]
-                {
-                    new Claim(ClaimTypes.Name, user.Username),
-                    new Claim(ClaimTypes.Role, user.Role),
-                    new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())
-                }),
+                Subject = new ClaimsIdentity(claims),
                 Expires = DateTime.UtcNow.AddMinutes(30),
                 SigningCredentials = new SigningCredentials(
                     new SymmetricSecurityKey(key),
@@ -113,14 +124,14 @@ namespace RateLimiter.Controllers
     // Request modelleri
     public class LoginRequest
     {
-        public string Username { get; set; }
-        public string Password { get; set; }
+        public string Username { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
     }
 
     public class RegisterRequest
     {
-        public string Username { get; set; }
-        public string Password { get; set; }
-        public string? Role { get; set; }
+        public string Username { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
+        // Role parametresi kaldırıldı
     }
 }
