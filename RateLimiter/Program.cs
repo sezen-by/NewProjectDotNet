@@ -102,13 +102,16 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-// Add rate limiter middleware before authentication
-app.UseSlidingWindowRateLimiter(maxRequests: 100, windowSeconds: 60);
+/// Authentication middleware'ini ekle
+app.UseAuthentication(); 
 
-// Authentication middleware'ini ekle - Authorization'dan önce olmalı
-app.UseAuthentication();
-app.UseAuthorization();
+// Authorization middleware'ini ekle
+app.UseAuthorization(); 
+
+// Add rate limiter middleware AFTER authentication so it knows who the user is
+app.UseSlidingWindowRateLimiter(maxRequests: 100, windowSeconds: 60); 
 
 app.MapControllers();
 
 app.Run();
+

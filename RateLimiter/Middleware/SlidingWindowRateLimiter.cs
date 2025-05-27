@@ -6,6 +6,8 @@ using System.Collections.Concurrent;
 using System.Security.Claims;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Linq; 
+using Microsoft.AspNetCore.Authorization; 
 
 namespace RateLimiter.Middleware
 {
@@ -17,6 +19,13 @@ namespace RateLimiter.Middleware
         private readonly ILogger<SlidingWindowRateLimiter> _logger;
         private readonly int _maxRequests;
         private readonly TimeSpan _window;
+
+        private readonly string[] _excludedPaths = {
+            "/api/auth/login",
+            "/api/auth/register",
+            "/swagger" // Swagger UI ve JSON endpoint'lerini de kapsar
+            // "/api/test/public-test" // PublicTest endpointi için de eklenebilir
+        };
 
         public SlidingWindowRateLimiter(
             RequestDelegate next,
@@ -36,6 +45,24 @@ namespace RateLimiter.Middleware
 
         public async Task InvokeAsync(HttpContext context)
         {
+            var path = context.Request.Path.Value?.ToLowerInvariant() ?? string.Empty;
+            var endpoint = context.GetEndpoint();
+            if (endpoint?.Metadata?.GetMetadata<IAllowAnonymous>() != null)
+            {
+                _logger.LogInformation($"Skipping rate limit for endpoint with [AllowAnonymous]: {path}");
+                await _next(context);
+                return;
+            }
+
+            // 2. Belirli yolları rate limiting'den muaf tut (yukarıdaki [AllowAnonymous] kontrolüne alternatif veya ek)
+            // Swagger için daha genel bir kontrol
+            if (_excludedPaths.Any(excludedPath => path.StartsWith(excludedPath)))
+            {
+                _logger.LogInformation($"Skipping rate limit for excluded path: {path}");
+                await _next(context);
+                return;
+            }
+
             // Tüm claim'leri logla
             foreach (var claim in context.User.Claims)
             {
@@ -45,17 +72,12 @@ namespace RateLimiter.Middleware
             var userId = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             _logger.LogInformation($"UserId from NameIdentifier: {userId}");
 
-            var isWhitelistedClaim = context.User.FindFirst("isWhitelisted")?.Value;
-            _logger.LogInformation($"isWhitelisted from claim: {isWhitelistedClaim}");
-
             // If user is not authenticated, use IP address as identifier
             string clientId = userId ?? context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
             _logger.LogInformation($"ClientId: {clientId}");
 
-            // Check if user is whitelisted
+            // Check if user is whitelisted (only from database)
             bool isWhitelisted = false;
-
-            // Önce veritabanından kontrol et
             if (userId != null)
             {
                 using (var scope = _serviceProvider.CreateScope())
@@ -68,16 +90,6 @@ namespace RateLimiter.Middleware
                 }
             }
 
-            // Eğer veritabanında yoksa claim'i kontrol et
-            if (!isWhitelisted && isWhitelistedClaim?.ToLower() == "true")
-            {
-                isWhitelisted = true;
-                _logger.LogInformation("User is whitelisted based on JWT claim");
-            }
-
-            _logger.LogInformation($"Final whitelist status: {isWhitelisted}");
-
-            // If user is whitelisted, skip rate limiting
             if (isWhitelisted)
             {
                 _logger.LogInformation("Skipping rate limit for whitelisted user");
@@ -88,14 +100,12 @@ namespace RateLimiter.Middleware
             string cacheKey = $"rate_limit_{clientId}";
             _logger.LogInformation($"Cache key: {cacheKey}");
 
-            // Get or create the request log for this client
             var requestLog = _cache.GetOrCreate(cacheKey, entry =>
             {
                 entry.SlidingExpiration = _window;
                 return new ConcurrentQueue<DateTime>();
             });
 
-            // Remove old requests outside the window
             var now = DateTime.UtcNow;
             while (requestLog!.TryPeek(out DateTime oldestRequest) &&
                   now - oldestRequest > _window)
@@ -105,14 +115,15 @@ namespace RateLimiter.Middleware
 
             _logger.LogInformation($"Current request count: {requestLog.Count}");
 
-            // Check if the request count is within limits
             if (requestLog.Count >= _maxRequests)
             {
                 _logger.LogWarning($"Rate limit exceeded for client {clientId}");
+                var retryAfterSeconds = (int)_window.TotalSeconds;
                 context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
                 await context.Response.WriteAsJsonAsync(new
                 {
                     error = "Too many requests",
+                    message = $"Rate limit exceeded. Try again in {retryAfterSeconds} seconds.",
                     retryAfter = _window.TotalSeconds,
                     currentCount = requestLog.Count,
                     maxRequests = _maxRequests
@@ -120,13 +131,14 @@ namespace RateLimiter.Middleware
                 return;
             }
 
-            // Add current request timestamp
             requestLog.Enqueue(now);
+            _cache.Set(cacheKey, requestLog, _window);
 
-            // Add rate limit headers using Append instead of Add
             context.Response.Headers.Append("X-RateLimit-Limit", _maxRequests.ToString());
             context.Response.Headers.Append("X-RateLimit-Remaining", (_maxRequests - requestLog.Count).ToString());
-            context.Response.Headers.Append("X-RateLimit-Reset", ((int)(now + _window).Subtract(new DateTime(1970, 1, 1)).TotalSeconds).ToString());
+            // Reset zamanını Unix timestamp olarak vermek yaygındır.
+            var resetTime = now.Add(_window);
+            context.Response.Headers.Append("X-RateLimit-Reset", new DateTimeOffset(resetTime).ToUnixTimeSeconds().ToString());
 
             await _next(context);
         }
@@ -143,5 +155,4 @@ namespace RateLimiter.Middleware
             return builder.UseMiddleware<SlidingWindowRateLimiter>(maxRequests, windowSeconds);
         }
     }
-} 
 } 
