@@ -1,46 +1,29 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using RateLimiter.Services.Interfaces;
 
 namespace RateLimiter.Controllers
 {
     [ApiController]
-    [Route("api/[controller]")]
-    [Authorize] // Sadece giriş yapmış kullanıcılar için
+    [Route("api/test")]
+    [Authorize] 
     public class TestController : ControllerBase
     {
-        private static int _requestCounter = 0;
+        private readonly ITestService _testService;
 
-        [HttpGet("test-rate-limit")]
+        public TestController(ITestService testService)
+        {
+            _testService = testService;
+        }
+
+        [HttpGet("rate-limit")]
         public IActionResult TestRateLimit()
         {
             var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
             var username = User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value;
             
-            _requestCounter++;
-
-            return Ok(new
-            {
-                message = "Test endpoint başarıyla çağrıldı!",
-                requestNumber = _requestCounter,
-                timestamp = DateTime.UtcNow,
-                userId = userId,
-                username = username
-            });
-        }
-
-        [HttpGet("public-test")]
-        [AllowAnonymous] // Herkes erişebilir
-        public IActionResult PublicTest()
-        {
-            _requestCounter++;
-
-            return Ok(new
-            {
-                message = "Public test endpoint başarıyla çağrıldı!",
-                requestNumber = _requestCounter,
-                timestamp = DateTime.UtcNow,
-                isAuthenticated = User.Identity?.IsAuthenticated ?? false
-            });
+            var response = _testService.ProcessAuthenticatedRequest(userId, username);
+            return Ok(response);
         }
     }
 } 

@@ -5,22 +5,34 @@ using Microsoft.OpenApi.Models;
 using RateLimiter.Data;
 using System.Text;
 using RateLimiter.Middleware;
+using RateLimiter.Services.Interfaces;
+using RateLimiter.Services;
+using RateLimiter.Interfaces;
+using RateLimiter.Repositories;
+using RateLimiter.Configuration;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add logging
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 builder.Logging.SetMinimumLevel(LogLevel.Information);
 
-// Add services to the container.
 builder.Services.AddControllers();
 
-// PostgreSQL bağlantısı
+// Configuration options
+builder.Services.Configure<RateLimitingOptions>(
+    builder.Configuration.GetSection(RateLimitingOptions.SectionName));
+
+builder.Services.AddScoped<ITestService, TestService>();
+builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IUserRepository, UserRepository>();
+builder.Services.AddScoped<IWhitelistService, WhitelistService>();
+builder.Services.AddScoped<IWhitelistRepository, WhitelistRepository>();
+builder.Services.AddScoped<IJwtService, JwtService>();
+
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// JWT Authentication yapılandırması
 var key = Encoding.ASCII.GetBytes("supersecretkey123!supersecretkey123!1234");
 builder.Services.AddAuthentication(options =>
 {
@@ -40,7 +52,6 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -51,7 +62,6 @@ builder.Services.AddSwaggerGen(c =>
         Description = "API with rate limiting and whitelist functionality"
     });
 
-    // JWT için security tanımı
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
@@ -78,18 +88,16 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-builder.Services.AddMemoryCache(); // Add this line for rate limiter
+builder.Services.AddMemoryCache(); 
 
 var app = builder.Build();
 
-// Database migration'ları otomatik uygula
 using (var scope = app.Services.CreateScope())
 {
     var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     context.Database.Migrate();
 }
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -102,14 +110,11 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-/// Authentication middleware'ini ekle
 app.UseAuthentication(); 
 
-// Authorization middleware'ini ekle
 app.UseAuthorization(); 
 
-// Add rate limiter middleware AFTER authentication so it knows who the user is
-app.UseSlidingWindowRateLimiter(maxRequests: 100, windowSeconds: 60); 
+app.UseSlidingWindowRateLimiter();
 
 app.MapControllers();
 

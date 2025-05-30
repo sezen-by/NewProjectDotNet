@@ -121,7 +121,7 @@ namespace RateLimiter.Migrations
                             Username = "admin"
                         });
                 });
-
+            // Üç farklı kullanıcının aynı kullanıcı adı ama  farklı rollere sahip olmasını sağlamak için (system admin, super admin, root admin)
             modelBuilder.Entity("RateLimiter.Models.WhitelistedUser", b =>
                 {
                     b.HasOne("RateLimiter.Models.User", "User")

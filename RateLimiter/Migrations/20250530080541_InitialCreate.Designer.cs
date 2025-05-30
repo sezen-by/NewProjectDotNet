@@ -12,7 +12,7 @@ using RateLimiter.Data;
 namespace RateLimiter.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20250526132222_InitialCreate")]
+    [Migration("20250530080541_InitialCreate")]
     partial class InitialCreate
     {
         /// <inheritdoc />

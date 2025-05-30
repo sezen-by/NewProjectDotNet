@@ -16,12 +16,10 @@ namespace RateLimiter.Data
         {
             base.OnModelCreating(modelBuilder);
 
-            // Enum'ı string olarak sakla
             modelBuilder.Entity<User>()
                 .Property(e => e.Role)
                 .HasConversion<string>();
 
-            // User tablosu konfigürasyonu
             modelBuilder.Entity<User>(entity =>
             {
                 entity.HasKey(e => e.Id);
@@ -30,11 +28,9 @@ namespace RateLimiter.Data
                 entity.Property(e => e.Role).IsRequired().HasDefaultValue(UserRole.user);
                 entity.Property(e => e.CreatedAt).HasDefaultValueSql("NOW()");
                 
-                // Username unique olsun
                 entity.HasIndex(e => e.Username).IsUnique();
             });
 
-            // WhitelistedUser tablosu konfigürasyonu
             modelBuilder.Entity<WhitelistedUser>(entity =>
             {
                 entity.HasKey(e => e.Id);
@@ -43,27 +39,23 @@ namespace RateLimiter.Data
                 entity.Property(e => e.CreatedAt).HasDefaultValueSql("NOW()");
                 entity.Property(e => e.IsActive).HasDefaultValue(true);
                 
-                // Foreign key relationship
                 entity.HasOne(e => e.User)
                       .WithMany()
                       .HasForeignKey(e => e.UserId)
                       .OnDelete(DeleteBehavior.Cascade);
                 
-                // Bir kullanıcı sadece bir kez whitelist'e alınabilir
                 entity.HasIndex(e => e.UserId).IsUnique();
                 entity.HasIndex(e => e.Username).IsUnique();
             });
 
-            // Seed data - İlk admin kullanıcısı ve whitelist
             modelBuilder.Entity<User>().HasData(
                 new User
                 {
                     Id = 1,
                     Username = "admin",
-                    // Sabit hash değeri kullandık - "admin123" şifresinin hash'i
                     Password = "$2a$11$M5Z/wPetuMFvzmorEESQTOzxB7IPn8C1R78PgLGGrEJtSPd.Zwuby",
                     Role = UserRole.admin,
-                    CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc) // Sabit tarih
+                    CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc) 
                 }
             );
 
@@ -74,7 +66,7 @@ namespace RateLimiter.Data
                     UserId = 1,
                     Username = "admin",
                     Description = "System Administrator",
-                    CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc), // Sabit tarih
+                    CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc), 
                     IsActive = true
                 }
             );

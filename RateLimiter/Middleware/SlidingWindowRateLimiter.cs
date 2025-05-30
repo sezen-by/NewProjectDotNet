@@ -8,12 +8,14 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Linq; 
 using Microsoft.AspNetCore.Authorization; 
+using Microsoft.Extensions.Options;
+using RateLimiter.Configuration;
 
 namespace RateLimiter.Middleware
 {
     public class SlidingWindowRateLimiter
     {
-        private readonly RequestDelegate _next;
+        private readonly RequestDelegate _next;  // Pipeline'daki bir sonraki middleware
         private readonly IMemoryCache _cache;
         private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<SlidingWindowRateLimiter> _logger;
@@ -23,8 +25,7 @@ namespace RateLimiter.Middleware
         private readonly string[] _excludedPaths = {
             "/api/auth/login",
             "/api/auth/register",
-            "/swagger" // Swagger UI ve JSON endpoint'lerini de kapsar
-            // "/api/test/public-test" // PublicTest endpointi için de eklenebilir
+            "/swagger" 
         };
 
         public SlidingWindowRateLimiter(
@@ -32,15 +33,14 @@ namespace RateLimiter.Middleware
             IMemoryCache cache,
             IServiceProvider serviceProvider,
             ILogger<SlidingWindowRateLimiter> logger,
-            int maxRequests = 100,  // Default 100 requests
-            int windowSeconds = 60)  // Default 1 minute window
+            IOptions<RateLimitingOptions> options)
         {
             _next = next;
             _cache = cache;
             _serviceProvider = serviceProvider;
             _logger = logger;
-            _maxRequests = maxRequests;
-            _window = TimeSpan.FromSeconds(windowSeconds);
+            _maxRequests = options.Value.MaxRequests;
+            _window = TimeSpan.FromSeconds(options.Value.WindowSeconds);
         }
 
         public async Task InvokeAsync(HttpContext context)
@@ -54,8 +54,6 @@ namespace RateLimiter.Middleware
                 return;
             }
 
-            // 2. Belirli yolları rate limiting'den muaf tut (yukarıdaki [AllowAnonymous] kontrolüne alternatif veya ek)
-            // Swagger için daha genel bir kontrol
             if (_excludedPaths.Any(excludedPath => path.StartsWith(excludedPath)))
             {
                 _logger.LogInformation($"Skipping rate limit for excluded path: {path}");
@@ -63,7 +61,6 @@ namespace RateLimiter.Middleware
                 return;
             }
 
-            // Tüm claim'leri logla
             foreach (var claim in context.User.Claims)
             {
                 _logger.LogInformation($"Claim: {claim.Type} = {claim.Value}");
@@ -72,22 +69,24 @@ namespace RateLimiter.Middleware
             var userId = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             _logger.LogInformation($"UserId from NameIdentifier: {userId}");
 
-            // If user is not authenticated, use IP address as identifier
-            string clientId = userId ?? context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            if (userId == null)
+            {
+                _logger.LogInformation("Skipping rate limit for anonymous/public user");
+                await _next(context);
+                return;
+            }
+
+            string clientId = userId;
             _logger.LogInformation($"ClientId: {clientId}");
 
-            // Check if user is whitelisted (only from database)
             bool isWhitelisted = false;
-            if (userId != null)
+            using (var scope = _serviceProvider.CreateScope())
             {
-                using (var scope = _serviceProvider.CreateScope())
-                {
-                    var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                    isWhitelisted = await dbContext.WhitelistedUsers
-                        .AsNoTracking()
-                        .AnyAsync(w => w.UserId == int.Parse(userId) && w.IsActive);
-                    _logger.LogInformation($"Database whitelist check result: {isWhitelisted}");
-                }
+                var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                isWhitelisted = await dbContext.WhitelistedUsers
+                    .AsNoTracking()
+                    .AnyAsync(w => w.UserId == int.Parse(userId) && w.IsActive);
+                _logger.LogInformation($"Database whitelist check result: {isWhitelisted}");
             }
 
             if (isWhitelisted)
@@ -136,7 +135,6 @@ namespace RateLimiter.Middleware
 
             context.Response.Headers.Append("X-RateLimit-Limit", _maxRequests.ToString());
             context.Response.Headers.Append("X-RateLimit-Remaining", (_maxRequests - requestLog.Count).ToString());
-            // Reset zamanını Unix timestamp olarak vermek yaygındır.
             var resetTime = now.Add(_window);
             context.Response.Headers.Append("X-RateLimit-Reset", new DateTimeOffset(resetTime).ToUnixTimeSeconds().ToString());
 
@@ -144,15 +142,12 @@ namespace RateLimiter.Middleware
         }
     }
 
-    // Extension method for easy middleware registration
     public static class SlidingWindowRateLimiterExtensions
     {
         public static IApplicationBuilder UseSlidingWindowRateLimiter(
-            this IApplicationBuilder builder,
-            int maxRequests = 100,
-            int windowSeconds = 60)
+            this IApplicationBuilder builder)
         {
-            return builder.UseMiddleware<SlidingWindowRateLimiter>(maxRequests, windowSeconds);
+            return builder.UseMiddleware<SlidingWindowRateLimiter>();
         }
     }
 } 
